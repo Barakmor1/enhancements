@@ -73,13 +73,25 @@ As part of this design, we want to explore using these hooks to move pre-migrati
 modifications to the target virt-launcher pod.
 For more details, see [Libvirt Hooks](https://libvirt.org/hooks.html#etc-libvirt-hooks-qemu)
 
-1. Target virt-launcher starts a lightweight hook server on a Unix domain socket.
-2. Libvirt executes a hook script during `migrate-begin` and passes domain XML to stdin.
-3. The script sends XML to the virt-launcher socket via `ncat`.
-4. Launcher applies all registered hooks (per SIG).
-5. Modified XML is returned to the hook script.
-6. Script writes final XML to stdout.
-7. Libvirt defines the domain using the modified XML.
+The implementation consists of two main components:
+1. PreMigration Hook Server
+A lightweight server that listens on a Unix domain socket in the target virt-launcher pod. 
+It accepts domain XML, applies all registered hook functions sequentially, and returns the modified XML.
+2. Libvirt Hook Client
+A Go binary that replaces the default qemu hook script. 
+When libvirt invokes it during migrate begin, the client forwards domain XML to the hook server and returns 
+the modified XML.
+
+
+### Flow
+1. Target virt-launcher starts the PreMigration Hook Server on a Unix domain socket.
+2. The default qemu hook script is replaced with the libvirt hook client.
+3. Libvirt executes the hook during migrate begin and passes domain XML to stdin.
+4. The client connects to the hook server socket and sends the XML.
+5. The hook server applies all registered hooks.
+6. Modified XML is returned to the client via the socket.
+7. The client writes the final XML to stdout.
+8. Libvirt defines the domain using the modified XML.
 
 ### Deprecation Plan
 
@@ -130,7 +142,23 @@ It should be a scalable and extendable hook system that allows adding new hooks.
 - Remove deprecated fields population after one release  
 - Allow additional VEPs (e.g., VEP 109, 111) to use the same hook system  
 
-## Implementation History
+## Implementation Phases
 
-- Initial PR introduces hook server  
-- Follow-up commits migrate existing XML logic (dedicated cpus) into hooks
+- [ ] Add the new implementation, protected by a feature gate called TargetSideMigrationHooks that is disabled by default.
+- [ ] Migrate existing XML modifications from the source virt-launcher to target-side hooks(e.g., dedicated CPU pinning, disk configuration).
+
+## Feature lifecycle Phases
+
+### Alpha
+- Implement the target-side hook server and libvirt hook client, protected by the TargetSideMigrationHooks feature gate.
+- Migrate existing XML modifications from source to target-side hooks (dedicated CPU pinning, etc.).
+
+### Beta
+- Enable feature gate by default.
+
+### GA
+
+### Post-GA
+- Remove the qemu hook shell script and place the libvirt hook client binary directly in the launcher container image.
+- Remove all source-side XML modification code in virt-launcher, but continue supporting old virt-launchers in virt-handler.
+- Deprecate vmi.status fields that are no longer needed because data can now be fetched directly from the target.
